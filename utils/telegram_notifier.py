@@ -52,14 +52,18 @@ def cmd_reset(message):
     bot.reply_to(message, "☢️ <b>NUCLEAR RESET DIMULAI...</b>\nSedang membersihkan semua posisi dan order. Mohon tunggu.", parse_mode="HTML")
     
     try:
-        # 1. Batalkan SEMUA Open Orders di akun
+        # 1. Batalkan SEMUA Open Orders di akun (Try-Except per koin biar gak mandek)
         open_orders = binance_client.get_open_orders()
+        cancel_count = 0
         for o in open_orders:
-            binance_client.cancel_order(symbol=o['symbol'], orderId=o['orderId'])
+            try:
+                binance_client.cancel_order(symbol=o['symbol'], orderId=o['orderId'])
+                cancel_count += 1
+            except Exception: pass
             
         # 2. Ambil semua aset yang punya saldo > 0 dan bukan USDT
         acc = binance_client.get_account()
-        balances = [b for b in acc['balances'] if float(b['free']) + float(b['locked']) > 0 and b['asset'] != 'USDT']
+        balances = [b for b in acc['balances'] if float(b['free']) + float(b['locked']) > 0.0001 and b['asset'] != 'USDT']
         
         sold_count = 0
         for b in balances:
@@ -68,13 +72,14 @@ def cmd_reset(message):
             qty = float(b['free']) + float(b['locked'])
             
             try:
-                # Cek filter lot size
                 info = binance_client.get_symbol_info(symbol)
                 if not info: continue
                 
                 from binance.helpers import round_step_size
                 lot_f = next((f for f in info['filters'] if f['filterType'] == 'LOT_SIZE'), None)
-                step = float(lot_f['stepSize']) if lot_f else 0.0001
+                if not lot_f: continue
+                
+                step = float(lot_f['stepSize'])
                 final_qty = round_step_size(qty, step)
                 
                 if final_qty > 0:
@@ -98,15 +103,16 @@ def cmd_reset(message):
             
         config.SKIPPED_SIGNALS = []
         
-        # 4. Update Modal Awal ke Saldo Sekarang (biar P/L jadi 0%)
+        # 4. Ambil Saldo Baru & Reset Modal Awal
         new_acc = binance_client.get_account()
-        final_usdt = float(next((a['free'] for a in new_acc['balances'] if a['asset'] == 'USDT'), 0))
-        config.STARTING_BALANCE = final_usdt
+        free_usdt = float(next((a['free'] for a in new_acc['balances'] if a['asset'] == 'USDT'), 0))
+        locked_usdt = float(next((a['locked'] for a in new_acc['balances'] if a['asset'] == 'USDT'), 0))
+        config.STARTING_BALANCE = free_usdt + locked_usdt
         
-        bot.send_message(chat_id, f"✅ <b>RESET BERHASIL!</b>\n\n- {len(open_orders)} Order dibatalkan.\n- {sold_count} Koin dijual balik ke USDT.\n- History & Log dikosongkan.\n- Modal Awal Bot di-reset ke: <b>{final_usdt:,.2f} USDT</b>.\n\nSekarang bot kamu bersih dari nol lagi! 🚀", parse_mode="HTML")
+        bot.send_message(chat_id, f"✅ <b>NUCLEAR RESET BERHASIL!</b>\n\n- {cancel_count} Order dibatalkan.\n- {sold_count} Koin disapu bersih ke USDT.\n- History & Log dikosongkan.\n- Profit/Loss kamu sekarang di-reset ke <b>0%</b>.\n- Modal Awal baru: <b>{config.STARTING_BALANCE:,.2f} USDT</b>.\n\nSekarang bot kamu bersih total! 🚀", parse_mode="HTML")
 
     except Exception as e:
-        bot.send_message(chat_id, f"❌ Gagal melakukan Reset: {e}")
+        bot.send_message(chat_id, f"❌ Terjadi kesalahan fatal saat Reset: {e}")
 
 @bot.message_handler(commands=['run'])
 def cmd_run(message):
