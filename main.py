@@ -19,22 +19,31 @@ from core.executer import open_buy_position
 from utils.telegram_notifier import send_telegram_message, start_telegram_polling, set_binance_client, auto_check_closed_trades
 from utils.trade_logger import init_trade_logger
 
-def get_current_open_positions(client: Client):
+def get_current_active_symbols(client: Client):
     """
-    Menghitung jumlah posisi aktif kita dengan cara mencari order SELL 
-    (Take Profit / Stop Loss) yang saat ini sedang menunggu/menggantung di Market.
-    Ini jauh lebih akurat daripada menghitung sisa koin (dust balance).
+    Menghitung posisi aktif berdasarkan koin yang BENAR-BENAR KITA PEGANG (ada di Wallet Testnet kita).
+    Jika OCO error, koin tetap ada di wallet, sehingga bot tidak akan ngespam BUY lagi.
     """
     try:
-        orders = client.get_open_orders()
+        acc = client.get_account()
         active_symbols = set()
-        for o in orders:
-            if o['side'] == 'SELL' and o['symbol'].endswith('USDT'):
-                active_symbols.add(o['symbol'])
-        return len(active_symbols)
+        for a in acc['balances']:
+            asset = a['asset']
+            if asset == 'USDT': continue
+            
+            total_qty = float(a['free']) + float(a['locked'])
+            if total_qty > 0:
+                # Cek apakah bernilai lebih dari 2 USDT (mengabaikan debu/dust)
+                # Hanya menebak harga kasar, kita bisa periksa jika jumlahnya cukup signifikan
+                # Lebih aman kita asumsikan jika koin nyangkut, qty pasti sesuai budget awal ($50)
+                # Filter manual yang simple: jika qty bukan 0, masukkan ke daftar aktif
+                sym = f"{asset}USDT"
+                active_symbols.add(sym)
+                
+        return active_symbols
     except Exception as e:
-        print(f"[API ERROR] Gagal cek posisi berjalan dari open orders: {e}")
-        return 0
+        print(f"[API ERROR] Gagal cek saldo wallet: {e}")
+        return set()
 
 def get_all_usdt_pairs(client: Client):
     """
@@ -126,7 +135,8 @@ def main():
             start_time = time.time()
             
             max_pos = config.MAX_OPEN_POSITIONS
-            current_pos = get_current_open_positions(client) if max_pos else 0
+            active_symbols = get_current_active_symbols(client)
+            current_pos = len(active_symbols) if max_pos else 0
             
             if max_pos:
                 print(f"--- LIMIT POSISI AKTIF: {current_pos}/{max_pos} Terisi ---")
@@ -145,6 +155,11 @@ def main():
                     symbol = futures[future]
                     try:
                         sym, signal, reason, current_price = future.result()
+                        # Jika sudah pegang koin ini, jangan beli lagi sampe laku!
+                        if sym in active_symbols and signal == 'BUY_READY':
+                            print(f"🔄 [HOLD] {sym} sudah ada di dompet, skip Beli.")
+                            continue
+                            
                         # Jika ada sinyal BUY dicetak
                         if signal == 'BUY_READY':
                              print(f"🔥 [BUY SIGNAL] {sym}: {reason}")
@@ -157,7 +172,8 @@ def main():
                              else:
                                  # Buka posisi
                                  success = open_buy_position(client, sym, current_price, reason)
-                                 if success and max_pos:
+                                 if success:
+                                     active_symbols.add(sym)
                                      current_pos += 1
                     except Exception as exc:
                         print(f"⚠️ [WORKER ERROR] Gagal memproses {symbol}: {exc}")

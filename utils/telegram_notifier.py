@@ -35,9 +35,40 @@ def send_welcome(message):
                           f"/run - Mengaktifkan radar pemantau 24/7\n"
                           f"/stop - Mengistirahatkan radar\n"
                           f"/status - Mengecek posisi koin-koin yang masuk keranjang\n"
+                          f"/status - Mengecek posisi koin-koin yang masuk keranjang\n"
                           f"/done - Mengecek hasil akhir (Profit/Rugi) trade yang sudah tertutup\n"
                           f"/log - Mengecek riwayat pembelian terakhir bot (Log CSV)\n"
-                          f"/bagus - Melihat potesi koin incaran terbaik yang di-skip mesin", parse_mode="HTML")
+                          f"/bagus - Melihat potesi koin incaran terbaik yang di-skip mesin\n"
+                          f"/clear - Menghapus history dan log untuk memulai dari nol", parse_mode="HTML")
+
+@bot.message_handler(commands=['clear', 'reset'])
+def cmd_clear(message):
+    import os
+    from utils.trade_logger import TRADE_CSV
+    
+    # Kosongkan file log CSV
+    if os.path.exists(TRADE_CSV):
+        try:
+            with open(TRADE_CSV, "w", newline='') as f:
+                import csv
+                writer = csv.writer(f)
+                writer.writerow(["Timestamp", "Symbol", "Action", "Price", "Amount USDT", "Strategy", "Note"])
+        except Exception:
+            pass
+            
+    # Kosongkan histori notifikasi otomatis
+    notified_file = os.path.join("logs", "notified_closed.txt")
+    if os.path.exists(notified_file):
+        try:
+            with open(notified_file, "w") as f:
+                f.write("")
+        except Exception:
+            pass
+            
+    # Kosongkan skipped signals di memory
+    config.SKIPPED_SIGNALS = []
+    
+    bot.reply_to(message, "🗑️ <b>HISTORY DIBERSIHKAN!</b>\n\nRiwayat Trade (/done), Log CSV (/log), dan daftar koin terlewat (/bagus) sudah di-reset menjadi nol.", parse_mode="HTML")
 
 @bot.message_handler(commands=['run'])
 def cmd_run(message):
@@ -215,31 +246,23 @@ def cmd_done(message):
             bot.send_message(message.chat.id, "Belum ada transaksi Beli.")
             return
 
-        # 2. Cek open orders untuk mengetahui koin yang statusnya MASIH AKTIF (Belum Done)
-        open_orders = binance_client.get_open_orders()
-        active_symbols = set([o['symbol'] for o in open_orders if o['side'] == 'SELL' and o['symbol'].endswith('USDT')])
-        
         reply_msg = "🏁 <b>HISTORI TRADE SELESAI (/Done):</b>\n\n"
         closed_count = 0
         
-        # 3. Proses hanya koin yang sudah di-BUY tapi sudah TIDAK ADA di open_orders (Artinya sudah TP / SL)
+        # 3. Proses hanya koin yang sudah di-BUY dan transaksi paling akhirnya adalah SELL
         for trade in buy_history:
             sym = trade['symbol']
             
-            # Jika masih aktif (nggantung), abaikan
-            if sym in active_symbols:
+            my_trades = binance_client.get_my_trades(symbol=sym, limit=5)
+            if not my_trades: continue
+            
+            last_trade = my_trades[-1]
+            if last_trade['isBuyer']: # Terakhir masih BUY, artinya belum dijual (Masih Floating)
                 continue
                 
-            # Jika sudah tidak aktif, cari riwayat SELL terakhir di akun untuk koin ini
-            my_trades = binance_client.get_my_trades(symbol=sym, limit=10)
-            sell_trades = [t for t in my_trades if not t['isBuyer']] # isBuyer = False (Artinya SELL)
-            
-            if not sell_trades:
-                continue # Belum kejual sama sekali (Mungkin SL dicancel manual dll)
-                
-            last_sell = sell_trades[-1]
-            sell_price = float(last_sell['price'])
-            sell_qty = float(last_sell['qty'])
+            # Sudah terjual!
+            sell_price = float(last_trade['price'])
+            sell_qty = float(last_trade['qty'])
             usd_received = sell_price * sell_qty
             usd_spent = trade['budget']
             
@@ -258,7 +281,7 @@ def cmd_done(message):
             )
             closed_count += 1
             
-            if closed_count >= 5: # Batasi tampilkan 5 terakhir biar Telegram nggak kepanjangan
+            if closed_count >= 10: # Tampilkan lebih banyak history (10 terakhir) di /done
                 break
                 
         if closed_count == 0:
@@ -296,10 +319,6 @@ def auto_check_closed_trades(client):
         with open(notified_file, "r", encoding="utf-8") as f:
             notified = set([line.strip() for line in f.readlines()])
             
-        # Get active open orders
-        open_orders = client.get_open_orders()
-        active_symbols = set([o['symbol'] for o in open_orders if o['side'] == 'SELL' and o['symbol'].endswith('USDT')])
-        
         # Read recent BUYs
         buy_history = []
         with open(TRADE_CSV, "r", encoding="utf-8") as f:
@@ -321,21 +340,19 @@ def auto_check_closed_trades(client):
             sym = trade['symbol']
             trade_id = f"{sym}_{trade['time']}"
             
-            if sym in active_symbols:
-                continue # Masih floating
-                
             if trade_id in notified:
                 continue # Sudah dinotifikasi
                 
-            # Baru selesai! Fetch hasil akhirnya
-            my_trades = client.get_my_trades(symbol=sym, limit=10)
-            sell_trades = [t for t in my_trades if not t['isBuyer']]
-            if not sell_trades:
+            # Baru selesai? Cek transaksi pamungkas si koin
+            my_trades = client.get_my_trades(symbol=sym, limit=5)
+            if not my_trades: continue
+            
+            last_trade = my_trades[-1]
+            if last_trade['isBuyer']: # Terakhir msh Buy -> blm TP/SL
                 continue
                 
-            last_sell = sell_trades[-1]
-            sell_price = float(last_sell['price'])
-            qty = float(last_sell['qty'])
+            sell_price = float(last_trade['price'])
+            qty = float(last_trade['qty'])
             usd_received = sell_price * qty
             usd_spent = trade['budget']
             pnl = usd_received - usd_spent
