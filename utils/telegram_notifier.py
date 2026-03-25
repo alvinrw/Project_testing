@@ -1,8 +1,9 @@
-import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import config
+import os
+import csv
 from threading import Thread
 from utils.telegram_state import save_chat_id, get_chat_id
+from utils.trade_logger import TRADE_CSV, log_trade
 
 # Inisialisasi Bot Telegram
 bot = telebot.TeleBot(config.TELEGRAM_BOT_TOKEN)
@@ -164,76 +165,76 @@ def cmd_status(message):
             
             open_assets_value = 0.0
             
-            if current_pos_count > 0:
-                active_info = "<b>Daftar Posisi Aktif Saat Ini:</b>\n"
-                for sym in symbols:
-                    sym_orders = [o for o in sell_orders if o['symbol'] == sym]
-                    tp = next((o['price'] for o in sym_orders if o['type'] == 'LIMIT_MAKER'), "N/A")
-                    sl = next((o['stopPrice'] for o in sym_orders if o['type'] == 'STOP_LOSS_LIMIT'), "N/A")
-                    
-                    # Cek harga market saat ini untuk koin tersebut
-                    ticker = binance_client.get_symbol_ticker(symbol=sym)
-                    current_price = float(ticker['price'])
-                    
-                    # Cari harga Beli (Entry Price) dari riwayat lokal kita
-                    entry_price = "N/A"
-                    import os
-                    from utils.trade_logger import TRADE_CSV
-                    if os.path.exists(TRADE_CSV):
-                        with open(TRADE_CSV, "r", encoding="utf-8") as f:
-                            for line in reversed(f.readlines()):
-                                cols = line.strip().split(',')
-                                if len(cols) >= 4 and cols[1] == sym and cols[2].upper() == "BUY":
-                                    entry_price = cols[3]
-                                    break
-                    
-                    # FALLBACK: Jika di CSV gak ada (akibat /clear), ambil dari history transaksi Binance beneran
-                    if entry_price == "N/A" and binance_client:
-                        try:
-                            my_trades = binance_client.get_my_trades(symbol=sym, limit=5)
-                            buy_trades = [t for t in my_trades if t['isBuyer']]
-                            if buy_trades:
-                                entry_price = str(buy_trades[-1]['price'])
-                        except Exception:
-                            pass
-                    
-                    # Hitung valuasi koin yang di-hold
-                    base_asset = sym.replace('USDT', '')
-                    asset_bal = float(next((a['free'] for a in acc['balances'] if a['asset'] == base_asset), 0))
-                    asset_bal += float(next((a['locked'] for a in acc['balances'] if a['asset'] == base_asset), 0))
-                    open_assets_value += (asset_bal * current_price)
-                    
-                    ur_pnl_str = ""
-                    if entry_price != "N/A":
-                        ep = float(entry_price)
-                        ur_pnl_pct = ((current_price - ep) / ep) * 100
-                        ur_pnl_val = asset_bal * (current_price - ep)
-                        icon = "🟢" if ur_pnl_val >= 0 else "🔴"
-                        # Hanya tampilkan jika asset balance valid
-                        if asset_bal > 0:
-                            ur_pnl_str = f"\n   🚀 <b>Unrealized P/L:</b> {icon} {ur_pnl_val:+.2f} USDT ({ur_pnl_pct:+.2f}%)"
-                            # Tambahkan tombol Close untuk koin ini
-                            markup.add(InlineKeyboardButton(f"❌ Jual Manual {sym}", callback_data=f"close_{sym}"))
-                        
-                    active_info += f"▻ <b>{sym}</b>\n   🏷️ Masuk (Beli): <code>{entry_price}</code> | 🔄 Skrg: <code>{current_price}</code>\n   🎯 TP: {tp} | 🛡️ SL: {sl}{ur_pnl_str}\n"
-                    
-            # Total kekayaan (Saldo nganggur + Nilai aset berjalan)
-            total_equity = total_usdt + open_assets_value
-            pnl = total_equity - config.STARTING_BALANCE
-            pnl_emoji = "🟢" if pnl >= 0 else "🔴"
+            # 3. Hitung Floating (Unrealized) P/L posisi yang sedang jalan
+            unrealized_pnl = 0
+            open_assets_value = 0
+            active_info = "<b>Daftar Posisi Aktif Saat Ini:</b>\n"
             
-            pnl_text = (f"💰 <b>Modal Awal:</b> {config.STARTING_BALANCE:,.2f} USDT\n"
-                        f"💵 <b>Estimasi Saldo Total:</b> {total_equity:,.2f} USDT\n"
-                        f"📈 <b>P/L (Profit/Loss):</b> {pnl_emoji} {pnl:,.2f} USDT\n"
-                        f"💸 <b>Sisa USDT Nganggur:</b> {total_usdt:,.2f} USDT\n\n")
+            # Baca Log untuk cari harga beli terakhir (Entry Price)
+            buy_prices = {}
+            if os.path.exists(TRADE_CSV):
+                 with open(TRADE_CSV, "r", encoding="utf-8") as f:
+                    rows = list(csv.reader(f))
+                    for row in reversed(rows):
+                        if len(row) >= 4 and row[2] == "BUY":
+                            if row[1] not in buy_prices: 
+                                buy_prices[row[1]] = float(row[3])
+
+            for b in acc['balances']:
+                asset = b['asset']
+                if asset == 'USDT': continue
+                
+                qty = float(b['free']) + float(b['locked'])
+                if qty > 0.0001:
+                    sym = f"{asset}USDT"
+                    try:
+                        ticker = binance_client.get_symbol_ticker(symbol=sym)
+                        curr_price = float(ticker['price'])
+                        asset_val = qty * curr_price
+                        open_assets_value += asset_val
+                        
+                        # Cari Entry Price
+                        entry = buy_prices.get(sym)
+                        if not entry:
+                             try:
+                                my_trades = binance_client.get_my_trades(symbol=sym, limit=5)
+                                buy_trades = [t for t in my_trades if t['isBuyer']]
+                                if buy_trades: entry = float(buy_trades[-1]['price'])
+                             except: pass
+                        
+                        ur_pnl_str = ""
+                        if entry:
+                            ur_pnl_val = (curr_price - entry) * qty
+                            ur_pnl_pct = ((curr_price - entry) / entry) * 100
+                            unrealized_pnl += ur_pnl_val
+                            icon = "🟢" if ur_pnl_val > 0 else "🔴"
+                            ur_pnl_str = f"| 🚀 P/L: {icon} {ur_pnl_val:+.2f} ({ur_pnl_pct:+.2f}%)"
+                            
+                        active_info += f"▻ <b>{sym}</b>\n   🏷️ Harga: <code>{curr_price}</code> {ur_pnl_str}\n"
+                        markup.add(InlineKeyboardButton(f"❌ Jual Manual {sym}", callback_data=f"close_{sym}"))
+                        current_pos_count += 1
+                    except: pass
+
+            if current_pos_count == 0:
+                active_info = "<i>Tidak ada posisi aktif saat ini.</i>"
+
+            total_session_pnl = realized_pnl + unrealized_pnl
+            pnl_icon = "🟢" if total_session_pnl >= 0 else "🔴"
+            
+            pnl_text = (f"📈 <b>Profit Sesi Ini:</b> {pnl_icon} <b>{total_session_pnl:+.2f} USDT</b>\n"
+                        f"   └ <i>(Realized: {realized_pnl:+.2f} | Floating: {unrealized_pnl:+.2f})</i>\n\n")
+
+            total_equity = total_usdt + open_assets_value
 
         except Exception as e:
             active_info = f"⚠️ <i>Gagal menyedot database Binance: {e}</i>"
 
     bot.reply_to(message, f"📊 <b>Laporan Status 24/7:</b>\n\n"
-                          f"Sistem: {status_text}\n"
-                          f"Batas Koleksi Posisi: {current_pos_count} / {config.MAX_OPEN_POSITIONS}\n\n"
-                          f"{pnl_text}"
+                           f"Sistem: {status_text}\n"
+                           f"Batas Koleksi Posisi: {current_pos_count} / {config.MAX_OPEN_POSITIONS}\n\n"
+                           f"{pnl_text}"
+                           f"💵 <b>Estimasi Saldo Total:</b> {total_equity:,.2f} USDT\n"
+                           f"💸 <b>Sisa USDT Nganggur:</b> {total_usdt:,.2f} USDT\n\n"
                            f"{active_info}\n\n"
                            f"Sinyal /bagus Tersimpan: {len(config.SKIPPED_SIGNALS)} koin\n\n"
                            f"💡 <i>Ketik /done untuk melihat riwayat Win/Loss trade yang sudah selesai.</i>", 
@@ -286,10 +287,9 @@ def callback_close_coin(call):
             quantity=quantity
         )
         
-        from utils.trade_logger import log_trade
-        log_trade(symbol, "SELL", sell_price, 0, "Manual Close", "Closed via Telegram Button")
+        log_trade(symbol, "SELL", sell_price, 0, "Manual Close", f"Closed via Telegram Button (PNL: {pnl:+.2f} USDT)")
         
-        bot.send_message(chat_id, f"💰 <b>{symbol} BERHASIL DITUTUP MANUAL!</b>\nLaku di harga market: <code>{sell_price}</code>", parse_mode="HTML")
+        bot.send_message(chat_id, f"💰 <b>{symbol} BERHASIL DITUTUP MANUAL!</b>\nLaku di harga market: <code>{sell_price}</code>\nProfit/Loss: <b>{pnl:+.2f} USDT</b>", parse_mode="HTML")
         
     except Exception as e:
         bot.send_message(chat_id, f"❌ Gagal menutup {symbol}: {e}")
@@ -498,6 +498,9 @@ def auto_check_closed_trades(client):
                 f"   💰 P/L Bersih: <b>{pnl:+.2f} USDT ({pnl_pct:+.2f}%)</b>\n"
             )
             send_telegram_message(msg)
+            
+            # Log P/L ke CSV agar cmd_status bisa hitung total session P/L
+            log_trade(sym, "SELL", sell_price, 0, "Auto Close", f"Target Hit (PNL: {pnl:+.2f} USDT)")
             
             # Record it as notified
             with open(notified_file, "a", encoding="utf-8") as f:
