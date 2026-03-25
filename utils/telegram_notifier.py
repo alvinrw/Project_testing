@@ -1,4 +1,5 @@
 import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import config
 from threading import Thread
 from utils.telegram_state import save_chat_id, get_chat_id
@@ -87,6 +88,7 @@ def cmd_status(message):
     active_info = "<i>Tidak ada posisi yang bergantung di Market saat ini.</i>"
     current_pos_count = 0
     pnl_text = ""
+    markup = InlineKeyboardMarkup()
     
     if binance_client:
         try:
@@ -141,6 +143,8 @@ def cmd_status(message):
                         # Hanya tampilkan jika asset balance valid
                         if asset_bal > 0:
                             ur_pnl_str = f"\n   🚀 <b>Unrealized P/L:</b> {icon} {ur_pnl_val:+.2f} USDT ({ur_pnl_pct:+.2f}%)"
+                            # Tambahkan tombol Close untuk koin ini
+                            markup.add(InlineKeyboardButton(f"❌ Jual Manual {sym}", callback_data=f"close_{sym}"))
                         
                     active_info += f"▻ <b>{sym}</b>\n   🏷️ Masuk (Beli): <code>{entry_price}</code> | 🔄 Skrg: <code>{current_price}</code>\n   🎯 TP: {tp} | 🛡️ SL: {sl}{ur_pnl_str}\n"
                     
@@ -161,9 +165,65 @@ def cmd_status(message):
                           f"Sistem: {status_text}\n"
                           f"Batas Koleksi Posisi: {current_pos_count} / {config.MAX_OPEN_POSITIONS}\n\n"
                           f"{pnl_text}"
-                          f"{active_info}\n\n"
-                          f"Sinyal /bagus Tersimpan: {len(config.SKIPPED_SIGNALS)} koin\n\n"
-                          f"💡 <i>Ketik /done untuk melihat riwayat Win/Loss trade yang sudah selesai.</i>", parse_mode="HTML")
+                           f"{active_info}\n\n"
+                           f"Sinyal /bagus Tersimpan: {len(config.SKIPPED_SIGNALS)} koin\n\n"
+                           f"💡 <i>Ketik /done untuk melihat riwayat Win/Loss trade yang sudah selesai.</i>", 
+                           parse_mode="HTML", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("close_"))
+def callback_close_coin(call):
+    symbol = call.data.replace("close_", "")
+    chat_id = call.message.chat.id
+    
+    if not binance_client:
+        bot.answer_callback_query(call.id, "⚠️ API Belum Siap")
+        return
+        
+    bot.answer_callback_query(call.id, f"⌛ Menutup {symbol}...")
+    
+    try:
+        # 1. Batalkan semua order gantung (TP/SL) untuk koin ini
+        orders = binance_client.get_open_orders(symbol=symbol)
+        for o in orders:
+            binance_client.cancel_order(symbol=symbol, orderId=o['orderId'])
+            
+        # 2. Ambil semua saldo koin tersebut
+        acc = binance_client.get_account()
+        base_asset = symbol.replace('USDT', '')
+        asset_bal = float(next((a['free'] for a in acc['balances'] if a['asset'] == base_asset), 0))
+        
+        if asset_bal <= 0:
+            bot.send_message(chat_id, f"🤷‍♂️ Tidak ada saldo <b>{symbol}</b> untuk dijual.", parse_mode="HTML")
+            return
+            
+        # 3. Jual di Market Price
+        ticker = binance_client.get_symbol_ticker(symbol=symbol)
+        sell_price = float(ticker['price'])
+        
+        # Penanganan Lot Size Filter (Copy logic dari executer)
+        info = binance_client.get_symbol_info(symbol)
+        lot_filter = next((f for f in info['filters'] if f['filterType'] == 'LOT_SIZE'), None)
+        from binance.helpers import round_step_size
+        if lot_filter:
+            step_size = float(lot_filter['stepSize'])
+            quantity = round_step_size(asset_bal, step_size)
+        else:
+            quantity = asset_bal
+
+        binance_client.create_order(
+            symbol=symbol,
+            side='SELL',
+            type='MARKET',
+            quantity=quantity
+        )
+        
+        from utils.trade_logger import log_trade
+        log_trade(symbol, "SELL", sell_price, 0, "Manual Close", "Closed via Telegram Button")
+        
+        bot.send_message(chat_id, f"💰 <b>{symbol} BERHASIL DITUTUP MANUAL!</b>\nLaku di harga market: <code>{sell_price}</code>", parse_mode="HTML")
+        
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Gagal menutup {symbol}: {e}")
 
 @bot.message_handler(commands=['log', 'logs'])
 def cmd_log(message):

@@ -74,7 +74,11 @@ def open_buy_position(client: Client, symbol: str, current_price: float, reason:
             client._post('orderList/oco', True, data=oco_params)
             msg_oco = f"\n\n🎯 <b>Target Jual (TP):</b> {tp_price}\n🛡️ <b>Batas Rugi (SL):</b> {sl_price}"
         except Exception as oco_err:
-            msg_oco = f"\n\n⚠️ <i>Gagal memasang otomatis TP/SL OCO: {oco_err}. (Anda harus setel manual).</i>"
+            error_str = str(oco_err)
+            if "MAX_NUM_ALGO_ORDERS" in error_str:
+                msg_oco = f"\n\n⚠️ <b>FILTER ERROR: Terlalu banyak order gantung (OCO) di Binance Testnet.</b>\n\nKoin sudah dibeli tapi <b>TP/SL GAGAL terpasang otomatis</b>. Silakan gunakan tombol <b>Jual Manual</b> di /status nanti kalau mau tutup."
+            else:
+                msg_oco = f"\n\n⚠️ <i>Gagal memasang otomatis TP/SL OCO: {oco_err}. (Anda harus setel manual).</i>"
         
         # Jika berhasil
         msg = f"✅ <b>Beli Berhasil</b>\n\n<b>Koin:</b> {symbol}\n<b>Harga Beli:</b> {current_price}\n<b>Modal:</b> {budget_usdt} USDT\n<b>Alasan:</b> {reason}{msg_oco}"
