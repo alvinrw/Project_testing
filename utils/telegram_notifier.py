@@ -140,12 +140,19 @@ def cmd_run(message):
 @bot.message_handler(commands=['stop'])
 def cmd_stop(message):
     config.BOT_ACTIVE = False
-    bot.reply_to(message, "🔴 <b>Bot Trading DIHENTIKAN!</b>\nMesin di-pause menunggu perintah /run berikutnya.", parse_mode="HTML")
+    bot.reply_to(message, "🔴 <b>Bot Trading DIHENTIKAN!</b>\nMesin di-pause menunggu perintah /run berikutnya.")
 
 @bot.message_handler(commands=['status'])
 def cmd_status(message):
-    status_text = "🟢 AKTIF (Berburu Sinyal)" if config.BOT_ACTIVE else "🔴 TIDUR (Jeda Istirahat)"
+    # set_binance_client() # This line is not needed here, client is set globally
+    status_text = "🟢 AKTIF (Berburu Sinyal)" if config.BOT_ACTIVE else "🔴 TIDUR (Jeda Istirahat)" # Reverted to BOT_ACTIVE as RUN_STATUS is not defined
     
+    # Inisialisasi variabel default biar nggak Error "referenced before assignment"
+    total_usdt = 0
+    total_equity = 0
+    realized_pnl = 0
+    unrealized_pnl = 0
+    open_assets_value = 0
     active_info = "<i>Tidak ada posisi yang bergantung di Market saat ini.</i>"
     current_pos_count = 0
     pnl_text = ""
@@ -153,7 +160,26 @@ def cmd_status(message):
     
     if binance_client:
         try:
-            # Kalkulasi PnL / Equity
+            # 1. Hitung Realized P/L
+            if os.path.exists(TRADE_CSV):
+                buys = {}
+                with open(TRADE_CSV, "r", encoding="utf-8") as f:
+                    reader = csv.reader(f)
+                    next(reader) 
+                    for row in reader:
+                        if len(row) < 7: continue
+                        sym, action, price, amount = row[1], row[2], float(row[3]), float(row[4])
+                        if action == "BUY":
+                            buys[sym] = amount
+                        elif action == "SELL":
+                            note = row[6]
+                            if "PNL:" in note:
+                                try:
+                                    pnl_val = float(note.split("PNL:")[1].split("USDT")[0].strip())
+                                    realized_pnl += pnl_val
+                                except: pass
+
+            # 2. Ambil data Wallet
             acc = binance_client.get_account()
             free_usdt = float(next((a['free'] for a in acc['balances'] if a['asset'] == 'USDT'), 0))
             locked_usdt = float(next((a['locked'] for a in acc['balances'] if a['asset'] == 'USDT'), 0))
