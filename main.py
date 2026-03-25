@@ -40,8 +40,8 @@ def get_current_active_symbols(client: Client):
             sym = f"{asset}USDT"
             price = all_tickers.get(sym, 0)
             
-            # Jika nilai koin > 2 USDT, baru kita anggap "Posisi Aktif"
-            if (qty * price) > 2.0:
+            # Jika nilai koin > 5.0 USDT, baru kita anggap "Posisi Aktif"
+            if (qty * price) > 5.0:
                 active_symbols.add(sym)
                 
         return active_symbols
