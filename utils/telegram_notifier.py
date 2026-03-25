@@ -40,36 +40,73 @@ def send_welcome(message):
                           f"/done - Mengecek hasil akhir (Profit/Rugi) trade yang sudah tertutup\n"
                           f"/log - Mengecek riwayat pembelian terakhir bot (Log CSV)\n"
                           f"/bagus - Melihat potesi koin incaran terbaik yang di-skip mesin\n"
-                          f"/clear - Menghapus history dan log untuk memulai dari nol", parse_mode="HTML")
+                          f"/reset - NUCLEAR RESET: Jual semua koin ke USDT & hapus history", parse_mode="HTML")
 
-@bot.message_handler(commands=['clear', 'reset'])
-def cmd_clear(message):
-    import os
-    from utils.trade_logger import TRADE_CSV
+@bot.message_handler(commands=['reset', 'clear'])
+def cmd_reset(message):
+    chat_id = message.chat.id
+    if not binance_client:
+        bot.reply_to(message, "⚠️ API Belum Siap")
+        return
+
+    bot.reply_to(message, "☢️ <b>NUCLEAR RESET DIMULAI...</b>\nSedang membersihkan semua posisi dan order. Mohon tunggu.", parse_mode="HTML")
     
-    # Kosongkan file log CSV
-    if os.path.exists(TRADE_CSV):
-        try:
+    try:
+        # 1. Batalkan SEMUA Open Orders di akun
+        open_orders = binance_client.get_open_orders()
+        for o in open_orders:
+            binance_client.cancel_order(symbol=o['symbol'], orderId=o['orderId'])
+            
+        # 2. Ambil semua aset yang punya saldo > 0 dan bukan USDT
+        acc = binance_client.get_account()
+        balances = [b for b in acc['balances'] if float(b['free']) + float(b['locked']) > 0 and b['asset'] != 'USDT']
+        
+        sold_count = 0
+        for b in balances:
+            asset = b['asset']
+            symbol = f"{asset}USDT"
+            qty = float(b['free']) + float(b['locked'])
+            
+            try:
+                # Cek filter lot size
+                info = binance_client.get_symbol_info(symbol)
+                if not info: continue
+                
+                from binance.helpers import round_step_size
+                lot_f = next((f for f in info['filters'] if f['filterType'] == 'LOT_SIZE'), None)
+                step = float(lot_f['stepSize']) if lot_f else 0.0001
+                final_qty = round_step_size(qty, step)
+                
+                if final_qty > 0:
+                    binance_client.create_order(symbol=symbol, side='SELL', type='MARKET', quantity=final_qty)
+                    sold_count += 1
+            except Exception as e:
+                print(f"Gagal jual {symbol} saat reset: {e}")
+
+        # 3. Bersihkan file LOG dan Notifikasi
+        import os
+        from utils.trade_logger import TRADE_CSV
+        if os.path.exists(TRADE_CSV):
             with open(TRADE_CSV, "w", newline='') as f:
                 import csv
                 writer = csv.writer(f)
                 writer.writerow(["Timestamp", "Symbol", "Action", "Price", "Amount USDT", "Strategy", "Note"])
-        except Exception:
-            pass
+        
+        notified_file = os.path.join("logs", "notified_closed.txt")
+        if os.path.exists(notified_file):
+            with open(notified_file, "w") as f: f.write("")
             
-    # Kosongkan histori notifikasi otomatis
-    notified_file = os.path.join("logs", "notified_closed.txt")
-    if os.path.exists(notified_file):
-        try:
-            with open(notified_file, "w") as f:
-                f.write("")
-        except Exception:
-            pass
-            
-    # Kosongkan skipped signals di memory
-    config.SKIPPED_SIGNALS = []
-    
-    bot.reply_to(message, "🗑️ <b>HISTORY DIBERSIHKAN!</b>\n\nRiwayat Trade (/done), Log CSV (/log), dan daftar koin terlewat (/bagus) sudah di-reset menjadi nol.", parse_mode="HTML")
+        config.SKIPPED_SIGNALS = []
+        
+        # 4. Update Modal Awal ke Saldo Sekarang (biar P/L jadi 0%)
+        new_acc = binance_client.get_account()
+        final_usdt = float(next((a['free'] for a in new_acc['balances'] if a['asset'] == 'USDT'), 0))
+        config.STARTING_BALANCE = final_usdt
+        
+        bot.send_message(chat_id, f"✅ <b>RESET BERHASIL!</b>\n\n- {len(open_orders)} Order dibatalkan.\n- {sold_count} Koin dijual balik ke USDT.\n- History & Log dikosongkan.\n- Modal Awal Bot di-reset ke: <b>{final_usdt:,.2f} USDT</b>.\n\nSekarang bot kamu bersih dari nol lagi! 🚀", parse_mode="HTML")
+
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Gagal melakukan Reset: {e}")
 
 @bot.message_handler(commands=['run'])
 def cmd_run(message):
@@ -127,6 +164,16 @@ def cmd_status(message):
                                 if len(cols) >= 4 and cols[1] == sym and cols[2].upper() == "BUY":
                                     entry_price = cols[3]
                                     break
+                    
+                    # FALLBACK: Jika di CSV gak ada (akibat /clear), ambil dari history transaksi Binance beneran
+                    if entry_price == "N/A" and binance_client:
+                        try:
+                            my_trades = binance_client.get_my_trades(symbol=sym, limit=5)
+                            buy_trades = [t for t in my_trades if t['isBuyer']]
+                            if buy_trades:
+                                entry_price = str(buy_trades[-1]['price'])
+                        except Exception:
+                            pass
                     
                     # Hitung valuasi koin yang di-hold
                     base_asset = sym.replace('USDT', '')
