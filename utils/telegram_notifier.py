@@ -101,7 +101,17 @@ def cmd_status(message):
                     asset_bal += float(next((a['locked'] for a in acc['balances'] if a['asset'] == base_asset), 0))
                     open_assets_value += (asset_bal * current_price)
                     
-                    active_info += f"▻ <b>{sym}</b>\n   🏷️ Masuk (Beli): <code>{entry_price}</code> | 🔄 Skrg: <code>{current_price}</code>\n   🎯 TP: {tp} | 🛡️ SL: {sl}\n"
+                    ur_pnl_str = ""
+                    if entry_price != "N/A":
+                        ep = float(entry_price)
+                        ur_pnl_pct = ((current_price - ep) / ep) * 100
+                        ur_pnl_val = asset_bal * (current_price - ep)
+                        icon = "🟢" if ur_pnl_val >= 0 else "🔴"
+                        # Hanya tampilkan jika asset balance valid
+                        if asset_bal > 0:
+                            ur_pnl_str = f"\n   🚀 <b>Unrealized P/L:</b> {icon} {ur_pnl_val:+.2f} USDT ({ur_pnl_pct:+.2f}%)"
+                        
+                    active_info += f"▻ <b>{sym}</b>\n   🏷️ Masuk (Beli): <code>{entry_price}</code> | 🔄 Skrg: <code>{current_price}</code>\n   🎯 TP: {tp} | 🛡️ SL: {sl}{ur_pnl_str}\n"
                     
             # Total kekayaan (Saldo nganggur + Nilai aset berjalan)
             total_equity = total_usdt + open_assets_value
@@ -121,7 +131,8 @@ def cmd_status(message):
                           f"Batas Koleksi Posisi: {current_pos_count} / {config.MAX_OPEN_POSITIONS}\n\n"
                           f"{pnl_text}"
                           f"{active_info}\n\n"
-                          f"Sinyal /bagus Tersimpan: {len(config.SKIPPED_SIGNALS)} koin", parse_mode="HTML")
+                          f"Sinyal /bagus Tersimpan: {len(config.SKIPPED_SIGNALS)} koin\n\n"
+                          f"💡 <i>Ketik /done untuk melihat riwayat Win/Loss trade yang sudah selesai.</i>", parse_mode="HTML")
 
 @bot.message_handler(commands=['log', 'logs'])
 def cmd_log(message):
