@@ -107,9 +107,25 @@ def cmd_reset(message):
         new_acc = binance_client.get_account()
         free_usdt = float(next((a['free'] for a in new_acc['balances'] if a['asset'] == 'USDT'), 0))
         locked_usdt = float(next((a['locked'] for a in new_acc['balances'] if a['asset'] == 'USDT'), 0))
-        config.STARTING_BALANCE = free_usdt + locked_usdt
+        new_balance = free_usdt + locked_usdt
+        config.STARTING_BALANCE = new_balance
         
-        bot.send_message(chat_id, f"✅ <b>NUCLEAR RESET BERHASIL!</b>\n\n- {cancel_count} Order dibatalkan.\n- {sold_count} Koin disapu bersih ke USDT.\n- History & Log dikosongkan.\n- Profit/Loss kamu sekarang di-reset ke <b>0%</b>.\n- Modal Awal baru: <b>{config.STARTING_BALANCE:,.2f} USDT</b>.\n\nSekarang bot kamu bersih total! 🚀", parse_mode="HTML")
+        # 5. Update Permanen di File config.py
+        try:
+            config_path = os.path.join(os.getcwd(), "config.py")
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                with open(config_path, "w", encoding="utf-8") as f:
+                    for line in lines:
+                        if "STARTING_BALANCE =" in line:
+                            f.write(f"STARTING_BALANCE = {new_balance:.2f}   # Auto-reset via /reset\n")
+                        else:
+                            f.write(line)
+        except Exception as e_file:
+            print(f"Gagal update file config.py: {e_file}")
+
+        bot.send_message(chat_id, f"✅ <b>NUCLEAR RESET BERHASIL!</b>\n\n- {cancel_count} Order dibatalkan.\n- {sold_count} Koin disapu bersih ke USDT.\n- History & Log dikosongkan.\n- Modal Awal di-reset permanen ke: <b>{new_balance:,.2f} USDT</b>.\n- P/L kamu sekarang murni <b>0%</b>.\n\nSekarang bot kamu bersih total dari nol! 🚀", parse_mode="HTML")
 
     except Exception as e:
         bot.send_message(chat_id, f"❌ Terjadi kesalahan fatal saat Reset: {e}")
