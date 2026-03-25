@@ -21,23 +21,27 @@ from utils.trade_logger import init_trade_logger
 
 def get_current_active_symbols(client: Client):
     """
-    Menghitung posisi aktif berdasarkan koin yang BENAR-BENAR KITA PEGANG (ada di Wallet Testnet kita).
-    Jika OCO error, koin tetap ada di wallet, sehingga bot tidak akan ngespam BUY lagi.
+    Menghitung posisi aktif berdasarkan koin yang Punya Nilai Signifikan (> 2 USDT).
+    Mengabaikan koin 'debu' (dust) sisa testnet agar tidak memenuhi kuota posisi.
     """
     try:
         acc = client.get_account()
+        # Ambil semua harga sekaligus (biar cepat & nggak kena ban)
+        all_tickers = {t['symbol']: float(t['price']) for t in client.get_symbol_ticker()}
+        
         active_symbols = set()
         for a in acc['balances']:
             asset = a['asset']
             if asset == 'USDT': continue
             
-            total_qty = float(a['free']) + float(a['locked'])
-            if total_qty > 0:
-                # Cek apakah bernilai lebih dari 2 USDT (mengabaikan debu/dust)
-                # Hanya menebak harga kasar, kita bisa periksa jika jumlahnya cukup signifikan
-                # Lebih aman kita asumsikan jika koin nyangkut, qty pasti sesuai budget awal ($50)
-                # Filter manual yang simple: jika qty bukan 0, masukkan ke daftar aktif
-                sym = f"{asset}USDT"
+            qty = float(a['free']) + float(a['locked'])
+            if qty <= 0: continue
+            
+            sym = f"{asset}USDT"
+            price = all_tickers.get(sym, 0)
+            
+            # Jika nilai koin > 2 USDT, baru kita anggap "Posisi Aktif"
+            if (qty * price) > 2.0:
                 active_symbols.add(sym)
                 
         return active_symbols

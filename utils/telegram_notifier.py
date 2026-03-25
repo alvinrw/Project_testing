@@ -237,9 +237,11 @@ def cmd_status(message):
                             icon = "🟢" if ur_pnl_val > 0 else "🔴"
                             ur_pnl_str = f"| 🚀 P/L: {icon} {ur_pnl_val:+.2f} ({ur_pnl_pct:+.2f}%)"
                             
-                        active_info += f"▻ <b>{sym}</b>\n   🏷️ Harga: <code>{curr_price}</code> {ur_pnl_str}\n"
-                        markup.add(InlineKeyboardButton(f"❌ Jual Manual {sym}", callback_data=f"close_{sym}"))
-                        current_pos_count += 1
+                        # Hanya munculkan di list jika nilainya > 2.0 USDT (abaikan debu)
+                        if asset_val > 2.0:
+                            active_info += f"▻ <b>{sym}</b>\n   🏷️ Harga: <code>{curr_price}</code> {ur_pnl_str}\n"
+                            markup.add(InlineKeyboardButton(f"❌ Jual Manual {sym}", callback_data=f"close_{sym}"))
+                            current_pos_count += 1
                     except: pass
 
             if current_pos_count == 0:
