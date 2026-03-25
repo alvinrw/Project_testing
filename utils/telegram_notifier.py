@@ -1,3 +1,5 @@
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import config
 import os
 import csv
@@ -36,7 +38,6 @@ def send_welcome(message):
                           f"<b>⚙️ Daftar Perintah Kontrol Sistem:</b>\n"
                           f"/run - Mengaktifkan radar pemantau 24/7\n"
                           f"/stop - Mengistirahatkan radar\n"
-                          f"/status - Mengecek posisi koin-koin yang masuk keranjang\n"
                           f"/status - Mengecek posisi koin-koin yang masuk keranjang\n"
                           f"/done - Mengecek hasil akhir (Profit/Rugi) trade yang sudah tertutup\n"
                           f"/log - Mengecek riwayat pembelian terakhir bot (Log CSV)\n"
