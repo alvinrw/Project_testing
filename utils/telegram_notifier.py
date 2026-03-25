@@ -276,3 +276,86 @@ def run_telegram_bot_thread():
 def start_telegram_polling():
     t = Thread(target=run_telegram_bot_thread, daemon=True)
     t.start()
+
+def auto_check_closed_trades(client):
+    import os
+    from utils.trade_logger import TRADE_CSV
+    
+    notified_file = os.path.join("logs", "notified_closed.txt")
+    if not os.path.exists(os.path.dirname(notified_file)):
+        os.makedirs(os.path.dirname(notified_file), exist_ok=True)
+    if not os.path.exists(notified_file):
+        with open(notified_file, "w", encoding="utf-8") as f:
+            f.write("")
+            
+    if not os.path.exists(TRADE_CSV):
+        return
+        
+    try:
+        # Load already notified trades
+        with open(notified_file, "r", encoding="utf-8") as f:
+            notified = set([line.strip() for line in f.readlines()])
+            
+        # Get active open orders
+        open_orders = client.get_open_orders()
+        active_symbols = set([o['symbol'] for o in open_orders if o['side'] == 'SELL' and o['symbol'].endswith('USDT')])
+        
+        # Read recent BUYs
+        buy_history = []
+        with open(TRADE_CSV, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+            for line in reversed(lines):
+                cols = line.strip().split(',')
+                if len(cols) >= 7 and cols[2].upper() == "BUY":
+                    buy_history.append({
+                        'time': cols[0],
+                        'symbol': cols[1],
+                        'entry_price': float(cols[3]),
+                        'budget': float(cols[4]),
+                        'note': cols[6]
+                    })
+                if len(buy_history) >= 20: break
+                
+        # Process closures
+        for trade in buy_history:
+            sym = trade['symbol']
+            trade_id = f"{sym}_{trade['time']}"
+            
+            if sym in active_symbols:
+                continue # Masih floating
+                
+            if trade_id in notified:
+                continue # Sudah dinotifikasi
+                
+            # Baru selesai! Fetch hasil akhirnya
+            my_trades = client.get_my_trades(symbol=sym, limit=10)
+            sell_trades = [t for t in my_trades if not t['isBuyer']]
+            if not sell_trades:
+                continue
+                
+            last_sell = sell_trades[-1]
+            sell_price = float(last_sell['price'])
+            qty = float(last_sell['qty'])
+            usd_received = sell_price * qty
+            usd_spent = trade['budget']
+            pnl = usd_received - usd_spent
+            pnl_pct = (pnl / usd_spent) * 100
+            
+            icon = "🟢" if pnl > 0 else "🔴"
+            status_text = "MENCAPAI TP (PROFIT)" if pnl > 0 else "MENYENTUH SL (LOSS)"
+            
+            msg = (
+                f"🔔 <b>TRADE OTOMATIS TERTUTUP</b>\n\n"
+                f"{icon} <b>{sym}</b> ({status_text})\n"
+                f"   🔸 Harga Beli: <code>{trade['entry_price']}</code>\n"
+                f"   🔹 Terjual di: <code>{sell_price}</code>\n"
+                f"   💰 P/L Bersih: <b>{pnl:+.2f} USDT ({pnl_pct:+.2f}%)</b>\n"
+            )
+            send_telegram_message(msg)
+            
+            # Record it as notified
+            with open(notified_file, "a", encoding="utf-8") as f:
+                f.write(trade_id + "\n")
+                
+    except Exception as e:
+        print(f"[AUTO NOTIFICATION ERROR] {e}")

@@ -16,7 +16,7 @@ import config
 from core.data_fetcher import get_historical_klines_df
 from core.strategy import calculate_golden_trifecta
 from core.executer import open_buy_position
-from utils.telegram_notifier import send_telegram_message, start_telegram_polling, set_binance_client
+from utils.telegram_notifier import send_telegram_message, start_telegram_polling, set_binance_client, auto_check_closed_trades
 from utils.trade_logger import init_trade_logger
 
 def get_current_open_positions(client: Client):
@@ -131,6 +131,9 @@ def main():
             if max_pos:
                 print(f"--- LIMIT POSISI AKTIF: {current_pos}/{max_pos} Terisi ---")
                 
+            # Mengecek apakah ada posisi yang baru saja tertutup otomatis di market
+            auto_check_closed_trades(client)
+            
             # 3. Kirimkan semua koin (400+) ke sistem pekerja pool (ThreadPoolExecutor) menggunakan Batch Processing
             # Agar cepat, kita lempar puluhan pekerjaan ini secara otomatis agar berjalan paralel
             with ThreadPoolExecutor(max_workers=config.NUM_WORKERS) as executor:
