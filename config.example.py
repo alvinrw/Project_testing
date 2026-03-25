@@ -1,20 +1,15 @@
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
 # config.py
 # File untuk menset semua pengaturan kunci bot
 
-API_KEY = os.getenv("API_KEY", "")
-API_SECRET = os.getenv("API_SECRET", "")
+API_KEY = "your_api_key_here"
+API_SECRET = "your_api_secret_here"
 
 # Gunakan Testnet agar tidak memakai uang sungguhan saat testing
 USE_TESTNET = True
 
 # Pengaturan Telegram
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_BOT_TOKEN = "your_telegram_bot_token_here"
+TELEGRAM_CHAT_ID = "your_telegram_chat_id_here"
 
 # Pengaturan Trading
 QUOTE_ASSET = "USDT"         # Hanya trade koin yang berpasangan dengan USDT
