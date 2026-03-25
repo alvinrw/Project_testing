@@ -35,6 +35,7 @@ def send_welcome(message):
                           f"/run - Mengaktifkan radar pemantau 24/7\n"
                           f"/stop - Mengistirahatkan radar\n"
                           f"/status - Mengecek posisi koin-koin yang masuk keranjang\n"
+                          f"/done - Mengecek hasil akhir (Profit/Rugi) trade yang sudah tertutup\n"
                           f"/log - Mengecek riwayat pembelian terakhir bot (Log CSV)\n"
                           f"/bagus - Melihat potesi koin incaran terbaik yang di-skip mesin", parse_mode="HTML")
 
@@ -165,6 +166,97 @@ def cmd_bagus(message):
     else:
         text = "\n\n".join(config.SKIPPED_SIGNALS[-8:])
         bot.reply_to(message, f"⭐ <b>8 Sinyal Terbaik Terakhir (Terpaksa Diabaikan Karena Slot Habis):</b>\n\n{text}", parse_mode="HTML")
+
+@bot.message_handler(commands=['done', 'history'])
+def cmd_done(message):
+    import os
+    from utils.trade_logger import TRADE_CSV
+    
+    if not binance_client:
+        bot.reply_to(message, "⚠️ API Binance belum terhubung sepenuhnya.")
+        return
+
+    if not os.path.exists(TRADE_CSV):
+        bot.reply_to(message, "📜 Belum ada catatan log transaksi secara lokal.")
+        return
+        
+    bot.reply_to(message, "🔍 Sedang menyedot data history tertutup dari Binance... Mohon tunggu sebentar.")
+    
+    try:
+        # 1. Ambil history BUY kita
+        buy_history = []
+        with open(TRADE_CSV, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+            for line in reversed(lines):
+                cols = line.strip().split(',')
+                if len(cols) >= 7 and cols[2].upper() == "BUY":
+                    buy_history.append({
+                        'time': cols[0],
+                        'symbol': cols[1],
+                        'entry_price': float(cols[3]),
+                        'budget': float(cols[4]),
+                        'note': cols[6]
+                    })
+                if len(buy_history) >= 15: # Ambil 15 histori koin terakhir
+                    break
+        
+        if not buy_history:
+            bot.send_message(message.chat.id, "Belum ada transaksi Beli.")
+            return
+
+        # 2. Cek open orders untuk mengetahui koin yang statusnya MASIH AKTIF (Belum Done)
+        open_orders = binance_client.get_open_orders()
+        active_symbols = set([o['symbol'] for o in open_orders if o['side'] == 'SELL' and o['symbol'].endswith('USDT')])
+        
+        reply_msg = "🏁 <b>HISTORI TRADE SELESAI (/Done):</b>\n\n"
+        closed_count = 0
+        
+        # 3. Proses hanya koin yang sudah di-BUY tapi sudah TIDAK ADA di open_orders (Artinya sudah TP / SL)
+        for trade in buy_history:
+            sym = trade['symbol']
+            
+            # Jika masih aktif (nggantung), abaikan
+            if sym in active_symbols:
+                continue
+                
+            # Jika sudah tidak aktif, cari riwayat SELL terakhir di akun untuk koin ini
+            my_trades = binance_client.get_my_trades(symbol=sym, limit=10)
+            sell_trades = [t for t in my_trades if not t['isBuyer']] # isBuyer = False (Artinya SELL)
+            
+            if not sell_trades:
+                continue # Belum kejual sama sekali (Mungkin SL dicancel manual dll)
+                
+            last_sell = sell_trades[-1]
+            sell_price = float(last_sell['price'])
+            sell_qty = float(last_sell['qty'])
+            usd_received = sell_price * sell_qty
+            usd_spent = trade['budget']
+            
+            pnl = usd_received - usd_spent
+            pnl_pct = (pnl / usd_spent) * 100
+            
+            icon = "🟢" if pnl > 0 else "🔴"
+            status_text = "PROFIT (TP)" if pnl > 0 else "LOSS (SL)"
+            
+            reply_msg += (
+                f"{icon} <b>{sym}</b> ({status_text})\n"
+                f"   🔸 Harga Beli: <code>{trade['entry_price']}</code>\n"
+                f"   🔹 Terjual di: <code>{sell_price}</code>\n"
+                f"   📋 Setup: <i>{trade['note']}</i>\n"
+                f"   💰 P/L: <b>{pnl:+.2f} USDT ({pnl_pct:+.2f}%)</b>\n\n"
+            )
+            closed_count += 1
+            
+            if closed_count >= 5: # Batasi tampilkan 5 terakhir biar Telegram nggak kepanjangan
+                break
+                
+        if closed_count == 0:
+            bot.send_message(message.chat.id, "Semua trade kamu masih <i>menggantung (floating)</i> di market. Belum ada yang selesai atau kena TP/SL.", parse_mode="HTML")
+        else:
+            bot.send_message(message.chat.id, reply_msg, parse_mode="HTML")
+
+    except Exception as e:
+        bot.send_message(message.chat.id, f"⚠️ Gagal mengekstrak history dari Binance: {e}")
 
 def run_telegram_bot_thread():
     print("[TELEGRAM] Interaktif Bot telah on air! (Silakan Ketik /start di HP Anda)")
