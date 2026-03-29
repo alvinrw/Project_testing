@@ -1,4 +1,5 @@
 import telebot
+import time
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import config
 import os
@@ -71,11 +72,10 @@ def cmd_reset(message):
         for b in balances:
             asset = b['asset']
             symbol = f"{asset}USDT"
-            qty = float(b['free']) + float(b['locked'])
             
             try:
                 info = binance_client.get_symbol_info(symbol)
-                if not info: 
+                if not info:
                     print(f"Skipping {symbol}: Symbol info not found")
                     continue
                 
@@ -84,13 +84,37 @@ def cmd_reset(message):
                 if not lot_f: continue
                 
                 step = float(lot_f['stepSize'])
-                final_qty = round_step_size(qty, step)
+                
+                # Gunakan HANYA free balance untuk jual
+                # (locked balance sudah masuk via cancel_order di atas → sudah bebas)
+                # Re-fetch balance setelah cancel
+                try:
+                    fresh_acc  = binance_client.get_account()
+                    fresh_bal  = next((a for a in fresh_acc['balances'] if a['asset'] == asset), None)
+                    free_qty   = float(fresh_bal['free']) if fresh_bal else float(b['free'])
+                except Exception:
+                    free_qty = float(b['free'])
+                
+                final_qty = round_step_size(free_qty, step)
+                
+                # Cek MIN_NOTIONAL sebelum jual agar tidak kena Filter error
+                notional_f = next((f for f in info['filters'] if f['filterType'] in ('MIN_NOTIONAL', 'NOTIONAL')), None)
+                if notional_f:
+                    min_notional = float(notional_f.get('minNotional', notional_f.get('minQty', 0)))
+                    try:
+                        ticker = binance_client.get_symbol_ticker(symbol=symbol)
+                        curr_price = float(ticker['price'])
+                        if final_qty * curr_price < min_notional:
+                            print(f"Skipping {symbol}: Nilai ({final_qty * curr_price:.4f}) < MIN_NOTIONAL ({min_notional})")
+                            continue
+                    except Exception:
+                        pass  # Kalau gagal cek harga, tetap coba jual
                 
                 if final_qty > 0:
                     try:
                         binance_client.create_order(symbol=symbol, side='SELL', type='MARKET', quantity=final_qty)
                         sold_count += 1
-                        time.sleep(0.1) # Kasih nafas dikit biar gak kena ban
+                        time.sleep(0.15)  # Kasih nafas agar tidak kena rate limit
                     except Exception as e_sell:
                         print(f"Gagal jual {symbol}: {e_sell}")
             except Exception as e_info:

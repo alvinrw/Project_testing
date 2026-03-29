@@ -125,13 +125,15 @@ def main():
 
     # Loop utama 24 Jam
     cycle = 1
+    # Cooldown tracker: {symbol: timestamp_terakhir_beli}
+    # Mencegah bot re-entry ke koin yang sama dalam COOLDOWN_MINUTES menit
+    symbol_cooldown: dict = {}
     print(f"[3/3] Memulai sistem multi-worker ({config.NUM_WORKERS} Threads)...\n")
     
     while True:
         try:
             # Pengecekan status Toggle Bot dari perintah Telegram (/run, /stop)
             if not config.BOT_ACTIVE:
-                # Jangan spam layar saat tidur, cukup tunggu
                 time.sleep(5)
                 continue
                 
@@ -167,18 +169,28 @@ def main():
                         # Jika ada sinyal BUY dicetak
                         if signal == 'BUY_READY':
                              print(f"🔥 [BUY SIGNAL] {sym}: {reason}")
+                             
+                             # --- COOLDOWN CHECK ---
+                             cooldown_mins = getattr(config, 'COOLDOWN_MINUTES', 60)
+                             last_buy_time = symbol_cooldown.get(sym, 0)
+                             elapsed_mins  = (time.time() - last_buy_time) / 60
+                             if elapsed_mins < cooldown_mins:
+                                 remaining = cooldown_mins - elapsed_mins
+                                 print(f"⏳ [COOLDOWN] {sym} baru dibeli {elapsed_mins:.0f} mnt lalu. Tunggu {remaining:.0f} mnt lagi.")
+                                 continue
+                             
                              if max_pos and current_pos >= max_pos:
                                  print(f"🔒 [SKIPPED] Beli {sym} dibatalkan karena batas posisi ({max_pos}) penuh.")
-                                 # Catat ke memori agar bisa dilihat dari fitur /bagus Telegram
                                  config.SKIPPED_SIGNALS.append(f"💎 <b>{sym}</b> (Harga: <code>{current_price}</code>)\n   └ <i>{reason}</i>")
                                  if len(config.SKIPPED_SIGNALS) > 50:
-                                     config.SKIPPED_SIGNALS.pop(0) # hapus riwayat terlama
+                                     config.SKIPPED_SIGNALS.pop(0)
                              else:
                                  # Buka posisi
                                  success = open_buy_position(client, sym, current_price, reason)
                                  if success:
                                      active_symbols.add(sym)
                                      current_pos += 1
+                                     symbol_cooldown[sym] = time.time()  # Catat waktu beli
                     except Exception as exc:
                         print(f"⚠️ [WORKER ERROR] Gagal memproses {symbol}: {exc}")
                         
